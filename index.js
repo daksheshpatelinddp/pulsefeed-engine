@@ -21,7 +21,14 @@ export default {
     }
 
     const GNEWS_KEY = env.GNEWS_KEY || "2542a34ac06dc0b643417f7d2b22cb95";
-    const NEWSDATA_KEY = env.NEWSDATA_KEY || "pub_12f08057cb084a4b85ec90ebb5139099"; 
+    const NEWSDATA_KEY = env.NEWSDATA_KEY || "pub_12f08057cb084a4b85ec90ebb5139099";
+
+    // Custom headers to bypass RSS anti-bot checks
+    const browserHeaders = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.5"
+    };
 
     let rawArticles = [];
 
@@ -67,32 +74,25 @@ export default {
         } catch (e) {}
       })(),
 
-      // 3. Google News RSS (via RSS2JSON Engine)
+      // 3. Direct Google News RSS
       (async () => {
         try {
-          const targetUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
-          const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(targetUrl)}`);
+          const res = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`, {
+            headers: browserHeaders
+          });
           if (res.ok) {
-            const data = await res.json();
-            if (data.items) {
-              rawArticles.push(...data.items.map(a => ({
-                title: a.title,
-                link: a.link,
-                pubDate: a.pubDate,
-                source_name: a.author || "Google News",
-                source_icon: null,
-                api_source: "Google News RSS"
-              })));
-            }
+            const xml = await res.text();
+            const items = parseXmlItems(xml, "Google News RSS", "Google News");
+            rawArticles.push(...items);
           }
         } catch (e) {}
       })(),
 
-      // 4. Bing News RSS
+      // 4. Direct Bing News RSS
       (async () => {
         try {
           const res = await fetch(`https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`, {
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+            headers: browserHeaders
           });
           if (res.ok) {
             const xml = await res.text();
@@ -102,22 +102,16 @@ export default {
         } catch (e) {}
       })(),
 
-      // 5. Yahoo Finance RSS
+      // 5. Direct Yahoo News Search RSS
       (async () => {
         try {
-          const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(`https://news.search.yahoo.com/rss?p=${encodeURIComponent(query)}`)}`);
+          const res = await fetch(`https://news.search.yahoo.com/rss?p=${encodeURIComponent(query)}`, {
+            headers: browserHeaders
+          });
           if (res.ok) {
-            const data = await res.json();
-            if (data.items) {
-              rawArticles.push(...data.items.map(a => ({
-                title: a.title,
-                link: a.link,
-                pubDate: a.pubDate,
-                source_name: "Yahoo News",
-                source_icon: null,
-                api_source: "Yahoo Finance RSS"
-              })));
-            }
+            const xml = await res.text();
+            const items = parseXmlItems(xml, "Yahoo Finance RSS", "Yahoo News");
+            rawArticles.push(...items);
           }
         } catch (e) {}
       })()
