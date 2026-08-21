@@ -1,6 +1,5 @@
 export default {
   async fetch(request, env, ctx) {
-    // Handle CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -30,28 +29,22 @@ export default {
     let articles = [];
 
     try {
-      // Build Google News RSS URL for India / English
       const googleRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
       
-      // Fetch via rss2json API to bypass Cloudflare Worker IP blocks
-      const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(googleRssUrl)}`);
+      const res = await fetch(googleRssUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+          "Accept": "text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5"
+        }
+      });
 
       if (res.ok) {
-        const data = await res.json();
-        
-        if (data.status === "ok" && data.items) {
-          articles = data.items.map(item => ({
-            title: cleanText(item.title),
-            link: item.link,
-            pubDate: item.pubDate,
-            source_name: item.author || "Google News",
-            source_icon: null,
-            api_source: "Google News RSS"
-          }));
-        }
+        const xmlText = await res.text();
+        articles = parseGoogleNewsXml(xmlText);
       }
     } catch (e) {
-      // Error handling
+      // Catch potential fetch errors
     }
 
     return new Response(
@@ -72,11 +65,46 @@ export default {
   }
 };
 
+function parseGoogleNewsXml(xmlText) {
+  const items = [];
+  const blocks = xmlText.split("<item>");
+
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i].split("</item>")[0];
+
+    const titleMatch = block.match(/<title>(.*?)<\/title>/s);
+    const linkMatch = block.match(/<link>(.*?)<\/link>/s);
+    const pubDateMatch = block.match(/<pubDate>(.*?)<\/pubDate>/s);
+    const sourceMatch = block.match(/<source[^>]*>(.*?)<\/source>/s);
+
+    const title = titleMatch ? cleanText(titleMatch[1]) : "";
+    const link = linkMatch ? cleanText(linkMatch[1]) : "";
+    const pubDate = pubDateMatch ? cleanText(pubDateMatch[1]) : "";
+    const source = sourceMatch ? cleanText(sourceMatch[1]) : "Google News";
+
+    if (title && link) {
+      items.push({
+        title,
+        link,
+        pubDate,
+        source_name: source,
+        source_icon: null,
+        api_source: "Google News RSS"
+      });
+    }
+  }
+
+  return items;
+}
+
 function cleanText(str) {
   if (!str) return "";
   return str
     .replace("<![CDATA[", "")
     .replace("]]>", "")
     .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
     .trim();
 }
