@@ -23,13 +23,6 @@ export default {
     const GNEWS_KEY = env.GNEWS_KEY || "2542a34ac06dc0b643417f7d2b22cb95";
     const NEWSDATA_KEY = env.NEWSDATA_KEY || "pub_12f08057cb084a4b85ec90ebb5139099";
 
-    // Custom headers to bypass RSS anti-bot checks
-    const browserHeaders = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.5"
-    };
-
     let rawArticles = [];
 
     await Promise.allSettled([
@@ -74,12 +67,11 @@ export default {
         } catch (e) {}
       })(),
 
-      // 3. Direct Google News RSS
+      // 3. Google News RSS (Bypassing IP Ban via Corsproxy)
       (async () => {
         try {
-          const res = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`, {
-            headers: browserHeaders
-          });
+          const gUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
+          const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(gUrl)}`);
           if (res.ok) {
             const xml = await res.text();
             const items = parseXmlItems(xml, "Google News RSS", "Google News");
@@ -88,12 +80,10 @@ export default {
         } catch (e) {}
       })(),
 
-      // 4. Direct Bing News RSS
+      // 4. Bing News RSS
       (async () => {
         try {
-          const res = await fetch(`https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`, {
-            headers: browserHeaders
-          });
+          const res = await fetch(`https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`);
           if (res.ok) {
             const xml = await res.text();
             const items = parseXmlItems(xml, "Bing News RSS", "Bing News");
@@ -102,12 +92,11 @@ export default {
         } catch (e) {}
       })(),
 
-      // 5. Direct Yahoo News Search RSS
+      // 5. Yahoo News RSS (Bypassing IP Ban via Corsproxy)
       (async () => {
         try {
-          const res = await fetch(`https://news.search.yahoo.com/rss?p=${encodeURIComponent(query)}`, {
-            headers: browserHeaders
-          });
+          const yUrl = `https://news.search.yahoo.com/rss?p=${encodeURIComponent(query)}`;
+          const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(yUrl)}`);
           if (res.ok) {
             const xml = await res.text();
             const items = parseXmlItems(xml, "Yahoo Finance RSS", "Yahoo News");
