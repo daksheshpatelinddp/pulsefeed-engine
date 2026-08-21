@@ -21,7 +21,7 @@ export default {
     }
 
     const GNEWS_KEY = env.GNEWS_KEY || "2542a34ac06dc0b643417f7d2b22cb95";
-    const NEWSDATA_KEY = env.NEWSDATA_KEY || ""; 
+    const NEWSDATA_KEY = env.NEWSDATA_KEY || "pub_12f08057cb084a4b85ec90ebb5139099"; 
 
     const reqHeaders = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -30,7 +30,6 @@ export default {
 
     let rawArticles = [];
 
-    // Run all 5 fetch operations in parallel
     await Promise.allSettled([
       
       // 1. GNews API
