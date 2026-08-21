@@ -67,24 +67,33 @@ export default {
         } catch (e) {}
       })(),
 
-      // 3. Google News RSS (Routed through Proxy to Bypass Cloudflare Block)
+      // 3. Google News RSS (via RSS2JSON Engine)
       (async () => {
         try {
-          const gnewsRss = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
-          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(gnewsRss)}`;
-          const res = await fetch(proxyUrl);
+          const targetUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
+          const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(targetUrl)}`);
           if (res.ok) {
-            const xml = await res.text();
-            const items = parseXmlItems(xml, "Google News RSS", "Google News");
-            rawArticles.push(...items);
+            const data = await res.json();
+            if (data.items) {
+              rawArticles.push(...data.items.map(a => ({
+                title: a.title,
+                link: a.link,
+                pubDate: a.pubDate,
+                source_name: a.author || "Google News",
+                source_icon: null,
+                api_source: "Google News RSS"
+              })));
+            }
           }
         } catch (e) {}
       })(),
 
-      // 4. Bing News RSS (With Clean Link Resolution)
+      // 4. Bing News RSS
       (async () => {
         try {
-          const res = await fetch(`https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`);
+          const res = await fetch(`https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`, {
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+          });
           if (res.ok) {
             const xml = await res.text();
             const items = parseXmlItems(xml, "Bing News RSS", "Bing News");
@@ -96,11 +105,19 @@ export default {
       // 5. Yahoo Finance RSS
       (async () => {
         try {
-          const res = await fetch(`https://finance.yahoo.com/rss/headline?s=${encodeURIComponent(query)}`);
+          const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(`https://news.search.yahoo.com/rss?p=${encodeURIComponent(query)}`)}`);
           if (res.ok) {
-            const xml = await res.text();
-            const items = parseXmlItems(xml, "Yahoo Finance RSS", "Yahoo Finance");
-            rawArticles.push(...items);
+            const data = await res.json();
+            if (data.items) {
+              rawArticles.push(...data.items.map(a => ({
+                title: a.title,
+                link: a.link,
+                pubDate: a.pubDate,
+                source_name: "Yahoo News",
+                source_icon: null,
+                api_source: "Yahoo Finance RSS"
+              })));
+            }
           }
         } catch (e) {}
       })()
@@ -136,7 +153,6 @@ function parseXmlItems(xmlText, apiSource, defaultSource) {
     const pubDate = block.match(/<pubDate>(.*?)<\/pubDate>/s)?.[1] || "";
     const sourceMatch = block.match(/<source[^>]*>(.*?)<\/source>/s)?.[1] || defaultSource;
 
-    // Extract real destination URL from Bing's tracking links if present
     if (link.includes("url=")) {
       const actualUrlMatch = link.match(/url=([^&]+)/);
       if (actualUrlMatch) {
