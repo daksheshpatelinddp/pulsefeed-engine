@@ -1,6 +1,5 @@
 export default {
   async fetch(request, env, ctx) {
-    // Handle CORS preflight requests
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -22,52 +21,108 @@ export default {
     }
 
     const GNEWS_KEY = env.GNEWS_KEY || "2542a34ac06dc0b643417f7d2b22cb95";
-    let articles = [];
-    let usedSource = "";
+    const NEWSDATA_KEY = env.NEWSDATA_KEY || ""; 
 
-    // Primary Source: Direct GNews API Request
-    try {
-      const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&apikey=${GNEWS_KEY}`;
-      const res = await fetch(gnewsUrl);
+    const reqHeaders = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    };
+
+    let rawArticles = [];
+
+    // Run all 5 fetch operations in parallel
+    await Promise.allSettled([
       
-      if (res.ok) {
-        const data = await res.json();
-        if (data.articles && data.articles.length > 0) {
-          articles = data.articles.map(a => ({
-            title: a.title,
-            link: a.url,
-            pubDate: a.publishedAt
-          }));
-          usedSource = "GNews API";
-        }
-      }
-    } catch (e) {
-      // Fallback logging if needed
-    }
+      // 1. GNews API
+      (async () => {
+        try {
+          const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&country=in&apikey=${GNEWS_KEY}`;
+          const res = await fetch(gnewsUrl);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.articles) {
+              rawArticles.push(...data.articles.map(a => ({
+                title: a.title,
+                link: a.url,
+                pubDate: a.publishedAt,
+                source_name: a.source?.name || "GNews",
+                source_icon: null,
+                api_source: "GNews API"
+              })));
+            }
+          }
+        } catch (e) {}
+      })(),
 
-    // Secondary Fallback: Yahoo Finance RSS for Stock Tickers
-    if (articles.length === 0) {
-      try {
-        const yahooUrl = `https://finance.yahoo.com/rss/headline?s=${encodeURIComponent(query)}`;
-        const res = await fetch(yahooUrl, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-        });
-        const xmlText = await res.text();
-        const items = parseXmlItems(xmlText);
-        if (items.length > 0) {
-          articles = items;
-          usedSource = "Yahoo Finance RSS";
-        }
-      } catch (e) {}
-    }
+      // 2. NewsData.io API
+      (async () => {
+        if (!NEWSDATA_KEY) return;
+        try {
+          const newsdataUrl = `https://newsdata.io/api/1/latest?apikey=${NEWSDATA_KEY}&q=${encodeURIComponent(query)}&language=en&country=in`;
+          const res = await fetch(newsdataUrl);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.results) {
+              rawArticles.push(...data.results.map(a => ({
+                title: a.title,
+                link: a.link,
+                pubDate: a.pubDate,
+                source_name: a.source_name || "NewsData",
+                source_icon: a.source_icon || null,
+                api_source: "NewsData.io"
+              })));
+            }
+          }
+        } catch (e) {}
+      })(),
+
+      // 3. Google News RSS
+      (async () => {
+        try {
+          const gNewsRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
+          const res = await fetch(gNewsRssUrl, { headers: reqHeaders });
+          if (res.ok) {
+            const xml = await res.text();
+            const items = parseXmlItems(xml, "Google News RSS", "news.google.com");
+            rawArticles.push(...items);
+          }
+        } catch (e) {}
+      })(),
+
+      // 4. Bing News RSS
+      (async () => {
+        try {
+          const bingRssUrl = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`;
+          const res = await fetch(bingRssUrl, { headers: reqHeaders });
+          if (res.ok) {
+            const xml = await res.text();
+            const items = parseXmlItems(xml, "Bing News RSS", "bing.com");
+            rawArticles.push(...items);
+          }
+        } catch (e) {}
+      })(),
+
+      // 5. Yahoo Finance RSS
+      (async () => {
+        try {
+          const yahooUrl = `https://finance.yahoo.com/rss/headline?s=${encodeURIComponent(query)}`;
+          const res = await fetch(yahooUrl, { headers: reqHeaders });
+          if (res.ok) {
+            const xml = await res.text();
+            const items = parseXmlItems(xml, "Yahoo Finance RSS", "Yahoo Finance");
+            rawArticles.push(...items);
+          }
+        } catch (e) {}
+      })()
+
+    ]);
 
     return new Response(
       JSON.stringify({
-        success: articles.length > 0,
+        success: rawArticles.length > 0,
         query,
-        source: usedSource,
-        count: articles.length,
-        articles
+        total_raw_count: rawArticles.length,
+        articles: rawArticles
       }),
       {
         status: 200,
@@ -80,7 +135,7 @@ export default {
   }
 };
 
-function parseXmlItems(xmlText) {
+function parseXmlItems(xmlText, apiSource, defaultSource) {
   const items = [];
   const blocks = xmlText.split("<item>");
   for (let i = 1; i < blocks.length; i++) {
@@ -88,13 +143,26 @@ function parseXmlItems(xmlText) {
     const title = block.match(/<title>(.*?)<\/title>/s)?.[1] || "";
     const link = block.match(/<link>(.*?)<\/link>/s)?.[1] || "";
     const pubDate = block.match(/<pubDate>(.*?)<\/pubDate>/s)?.[1] || "";
+    const sourceMatch = block.match(/<source[^>]*>(.*?)<\/source>/s)?.[1] || defaultSource;
+
     if (title) {
       items.push({
-        title: title.replace("<![CDATA[", "").replace("]]>", "").replace(/<[^>]*>/g, "").trim(),
-        link: link.replace("<![CDATA[", "").replace("]]>", "").trim(),
-        pubDate: pubDate.trim()
+        title: cleanText(title),
+        link: cleanText(link),
+        pubDate: cleanText(pubDate),
+        source_name: cleanText(sourceMatch),
+        source_icon: null,
+        api_source: apiSource
       });
     }
   }
   return items;
+}
+
+function cleanText(str) {
+  return str
+    .replace("<![CDATA[", "")
+    .replace("]]>", "")
+    .replace(/<[^>]*>/g, "")
+    .trim();
 }
