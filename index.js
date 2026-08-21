@@ -1,5 +1,6 @@
 export default {
   async fetch(request, env, ctx) {
+    // Handle CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -16,103 +17,49 @@ export default {
     if (!query) {
       return new Response(
         JSON.stringify({ success: false, message: "Query parameter 'q' is required" }),
-        { status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }
+        { 
+          status: 400, 
+          headers: { 
+            "Content-Type": "application/json", 
+            "Access-Control-Allow-Origin": "*" 
+          } 
+        }
       );
     }
 
-    const GNEWS_KEY = env.GNEWS_KEY || "2542a34ac06dc0b643417f7d2b22cb95";
-    const NEWSDATA_KEY = env.NEWSDATA_KEY || "pub_12f08057cb084a4b85ec90ebb5139099";
+    let articles = [];
 
-    let rawArticles = [];
-
-    await Promise.allSettled([
+    try {
+      // Build Google News RSS URL for India / English
+      const googleRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
       
-      // 1. GNews API
-      (async () => {
-        try {
-          const res = await fetch(`https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&country=in&apikey=${GNEWS_KEY}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.articles) {
-              rawArticles.push(...data.articles.map(a => ({
-                title: a.title,
-                link: a.url,
-                pubDate: a.publishedAt,
-                source_name: a.source?.name || "GNews",
-                source_icon: null,
-                api_source: "GNews API"
-              })));
-            }
-          }
-        } catch (e) {}
-      })(),
+      // Fetch via rss2json API to bypass Cloudflare Worker IP blocks
+      const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(googleRssUrl)}`);
 
-      // 2. NewsData.io API
-      (async () => {
-        try {
-          const res = await fetch(`https://newsdata.io/api/1/latest?apikey=${NEWSDATA_KEY}&q=${encodeURIComponent(query)}&language=en&country=in`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.results) {
-              rawArticles.push(...data.results.map(a => ({
-                title: a.title,
-                link: a.link,
-                pubDate: a.pubDate,
-                source_name: a.source_name || "NewsData",
-                source_icon: a.source_icon || null,
-                api_source: "NewsData.io"
-              })));
-            }
-          }
-        } catch (e) {}
-      })(),
-
-      // 3. Google News RSS (Bypassing IP Ban via Corsproxy)
-      (async () => {
-        try {
-          const gUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
-          const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(gUrl)}`);
-          if (res.ok) {
-            const xml = await res.text();
-            const items = parseXmlItems(xml, "Google News RSS", "Google News");
-            rawArticles.push(...items);
-          }
-        } catch (e) {}
-      })(),
-
-      // 4. Bing News RSS
-      (async () => {
-        try {
-          const res = await fetch(`https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`);
-          if (res.ok) {
-            const xml = await res.text();
-            const items = parseXmlItems(xml, "Bing News RSS", "Bing News");
-            rawArticles.push(...items);
-          }
-        } catch (e) {}
-      })(),
-
-      // 5. Yahoo News RSS (Bypassing IP Ban via Corsproxy)
-      (async () => {
-        try {
-          const yUrl = `https://news.search.yahoo.com/rss?p=${encodeURIComponent(query)}`;
-          const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(yUrl)}`);
-          if (res.ok) {
-            const xml = await res.text();
-            const items = parseXmlItems(xml, "Yahoo Finance RSS", "Yahoo News");
-            rawArticles.push(...items);
-          }
-        } catch (e) {}
-      })()
-
-    ]);
+      if (res.ok) {
+        const data = await res.json();
+        
+        if (data.status === "ok" && data.items) {
+          articles = data.items.map(item => ({
+            title: cleanText(item.title),
+            link: item.link,
+            pubDate: item.pubDate,
+            source_name: item.author || "Google News",
+            source_icon: null,
+            api_source: "Google News RSS"
+          }));
+        }
+      }
+    } catch (e) {
+      // Error handling
+    }
 
     return new Response(
       JSON.stringify({
-        success: rawArticles.length > 0,
+        success: articles.length > 0,
         query,
-        total_raw_count: rawArticles.length,
-        articles: rawArticles
+        total_raw_count: articles.length,
+        articles: articles
       }),
       {
         status: 200,
@@ -125,39 +72,8 @@ export default {
   }
 };
 
-function parseXmlItems(xmlText, apiSource, defaultSource) {
-  const items = [];
-  const blocks = xmlText.split("<item>");
-  
-  for (let i = 1; i < blocks.length; i++) {
-    const block = blocks[i].split("</item>")[0];
-    const title = block.match(/<title>(.*?)<\/title>/s)?.[1] || "";
-    let link = block.match(/<link>(.*?)<\/link>/s)?.[1] || "";
-    const pubDate = block.match(/<pubDate>(.*?)<\/pubDate>/s)?.[1] || "";
-    const sourceMatch = block.match(/<source[^>]*>(.*?)<\/source>/s)?.[1] || defaultSource;
-
-    if (link.includes("url=")) {
-      const actualUrlMatch = link.match(/url=([^&]+)/);
-      if (actualUrlMatch) {
-        link = decodeURIComponent(actualUrlMatch[1]);
-      }
-    }
-
-    if (title) {
-      items.push({
-        title: cleanText(title),
-        link: cleanText(link),
-        pubDate: cleanText(pubDate),
-        source_name: cleanText(sourceMatch),
-        source_icon: null,
-        api_source: apiSource
-      });
-    }
-  }
-  return items;
-}
-
 function cleanText(str) {
+  if (!str) return "";
   return str
     .replace("<![CDATA[", "")
     .replace("]]>", "")
