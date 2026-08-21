@@ -15,18 +15,13 @@ export default {
 
     if (!query) {
       return new Response(
-        JSON.stringify({ success: false, message: "Query parameter 'q' is required (e.g. ?q=Infosys)" }),
+        JSON.stringify({ success: false, message: "Query parameter 'q' is required" }),
         { status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }
       );
     }
 
     const GNEWS_KEY = env.GNEWS_KEY || "2542a34ac06dc0b643417f7d2b22cb95";
     const NEWSDATA_KEY = env.NEWSDATA_KEY || "pub_12f08057cb084a4b85ec90ebb5139099"; 
-
-    const reqHeaders = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    };
 
     let rawArticles = [];
 
@@ -35,8 +30,7 @@ export default {
       // 1. GNews API
       (async () => {
         try {
-          const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&country=in&apikey=${GNEWS_KEY}`;
-          const res = await fetch(gnewsUrl);
+          const res = await fetch(`https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&country=in&apikey=${GNEWS_KEY}`);
           if (res.ok) {
             const data = await res.json();
             if (data.articles) {
@@ -55,10 +49,8 @@ export default {
 
       // 2. NewsData.io API
       (async () => {
-        if (!NEWSDATA_KEY) return;
         try {
-          const newsdataUrl = `https://newsdata.io/api/1/latest?apikey=${NEWSDATA_KEY}&q=${encodeURIComponent(query)}&language=en&country=in`;
-          const res = await fetch(newsdataUrl);
+          const res = await fetch(`https://newsdata.io/api/1/latest?apikey=${NEWSDATA_KEY}&q=${encodeURIComponent(query)}&language=en&country=in`);
           if (res.ok) {
             const data = await res.json();
             if (data.results) {
@@ -75,27 +67,27 @@ export default {
         } catch (e) {}
       })(),
 
-      // 3. Google News RSS
+      // 3. Google News RSS (Routed through Proxy to Bypass Cloudflare Block)
       (async () => {
         try {
-          const gNewsRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
-          const res = await fetch(gNewsRssUrl, { headers: reqHeaders });
+          const gnewsRss = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
+          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(gnewsRss)}`;
+          const res = await fetch(proxyUrl);
           if (res.ok) {
             const xml = await res.text();
-            const items = parseXmlItems(xml, "Google News RSS", "news.google.com");
+            const items = parseXmlItems(xml, "Google News RSS", "Google News");
             rawArticles.push(...items);
           }
         } catch (e) {}
       })(),
 
-      // 4. Bing News RSS
+      // 4. Bing News RSS (With Clean Link Resolution)
       (async () => {
         try {
-          const bingRssUrl = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`;
-          const res = await fetch(bingRssUrl, { headers: reqHeaders });
+          const res = await fetch(`https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`);
           if (res.ok) {
             const xml = await res.text();
-            const items = parseXmlItems(xml, "Bing News RSS", "bing.com");
+            const items = parseXmlItems(xml, "Bing News RSS", "Bing News");
             rawArticles.push(...items);
           }
         } catch (e) {}
@@ -104,8 +96,7 @@ export default {
       // 5. Yahoo Finance RSS
       (async () => {
         try {
-          const yahooUrl = `https://finance.yahoo.com/rss/headline?s=${encodeURIComponent(query)}`;
-          const res = await fetch(yahooUrl, { headers: reqHeaders });
+          const res = await fetch(`https://finance.yahoo.com/rss/headline?s=${encodeURIComponent(query)}`);
           if (res.ok) {
             const xml = await res.text();
             const items = parseXmlItems(xml, "Yahoo Finance RSS", "Yahoo Finance");
@@ -137,12 +128,21 @@ export default {
 function parseXmlItems(xmlText, apiSource, defaultSource) {
   const items = [];
   const blocks = xmlText.split("<item>");
+  
   for (let i = 1; i < blocks.length; i++) {
     const block = blocks[i].split("</item>")[0];
     const title = block.match(/<title>(.*?)<\/title>/s)?.[1] || "";
-    const link = block.match(/<link>(.*?)<\/link>/s)?.[1] || "";
+    let link = block.match(/<link>(.*?)<\/link>/s)?.[1] || "";
     const pubDate = block.match(/<pubDate>(.*?)<\/pubDate>/s)?.[1] || "";
     const sourceMatch = block.match(/<source[^>]*>(.*?)<\/source>/s)?.[1] || defaultSource;
+
+    // Extract real destination URL from Bing's tracking links if present
+    if (link.includes("url=")) {
+      const actualUrlMatch = link.match(/url=([^&]+)/);
+      if (actualUrlMatch) {
+        link = decodeURIComponent(actualUrlMatch[1]);
+      }
+    }
 
     if (title) {
       items.push({
