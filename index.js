@@ -1,5 +1,6 @@
 export default {
   async fetch(request, env, ctx) {
+    // Handle CORS preflight requests
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -20,33 +21,17 @@ export default {
       );
     }
 
-    // Your active GNews API key
     const GNEWS_KEY = env.GNEWS_KEY || "2542a34ac06dc0b643417f7d2b22cb95";
-
     let articles = [];
     let usedSource = "";
 
-    // Step 1: Try Google News RSS
+    // Primary Source: Direct GNews API Request
     try {
-      articles = await fetchGoogleNews(query);
-      if (articles.length > 0) usedSource = "Google News RSS";
-    } catch (e) {}
-
-    // Step 2: Fallback to Bing News RSS if Google News yields 0 results
-    if (articles.length === 0) {
-      try {
-        articles = await fetchBingNews(query);
-        if (articles.length > 0) usedSource = "Bing News RSS";
-      } catch (e) {}
-    }
-
-    // Step 3: Fallback to GNews API if RSS feeds fail or return empty
-    if (articles.length === 0 && GNEWS_KEY) {
-      try {
-        const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&apikey=${GNEWS_KEY}`;
-        const res = await fetch(gnewsUrl);
+      const gnewsUrl = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&apikey=${GNEWS_KEY}`;
+      const res = await fetch(gnewsUrl);
+      
+      if (res.ok) {
         const data = await res.json();
-        
         if (data.articles && data.articles.length > 0) {
           articles = data.articles.map(a => ({
             title: a.title,
@@ -55,36 +40,45 @@ export default {
           }));
           usedSource = "GNews API";
         }
+      }
+    } catch (e) {
+      // Fallback logging if needed
+    }
+
+    // Secondary Fallback: Yahoo Finance RSS for Stock Tickers
+    if (articles.length === 0) {
+      try {
+        const yahooUrl = `https://finance.yahoo.com/rss/headline?s=${encodeURIComponent(query)}`;
+        const res = await fetch(yahooUrl, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+        });
+        const xmlText = await res.text();
+        const items = parseXmlItems(xmlText);
+        if (items.length > 0) {
+          articles = items;
+          usedSource = "Yahoo Finance RSS";
+        }
       } catch (e) {}
     }
 
     return new Response(
-      JSON.stringify({ success: true, query, source: usedSource, count: articles.length, articles }),
-      { status: 200, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }
+      JSON.stringify({
+        success: articles.length > 0,
+        query,
+        source: usedSource,
+        count: articles.length,
+        articles
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      }
     );
   }
 };
-
-async function fetchGoogleNews(query) {
-  const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
-  const res = await fetch(rssUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    }
-  });
-  const xml = await res.text();
-  return parseXmlItems(xml);
-}
-
-async function fetchBingNews(query) {
-  const rssUrl = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=rss`;
-  const res = await fetch(rssUrl, {
-    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-  });
-  const xml = await res.text();
-  return parseXmlItems(xml);
-}
 
 function parseXmlItems(xmlText) {
   const items = [];
