@@ -15,7 +15,7 @@ export default {
 
     if (!query) {
       return new Response(
-        JSON.stringify({ success: false, message: "Query parameter 'q' required (e.g. ?q=Infosys)" }),
+        JSON.stringify({ success: false, message: "Query parameter 'q' is required (e.g. ?q=Infosys)" }),
         { status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }
       );
     }
